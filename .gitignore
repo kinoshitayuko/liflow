@@ -12,11 +12,18 @@ venv/
 *.ckpt
 *.pt
 *.pth
+*.xyz
+*.png
 
 # Data and generated trajectories
 /data/
 scripts/traj_output_*/
 scripts/outputs/
+
+# Training / experiment files
+scripts/train_*.sh
+scripts/finetune_*.sh
+scripts/test_*.py
 
 # Training / experiment logs
 lightning_logs/
@@ -31,3 +38,15 @@ output.pptx
 
 # Manual file copies / backups
 * copy*.py
+
+# Python package metadata
+*.egg-info/
+
+# 論文用の画像ファイル作成ファイル
+make_figure_neurips2026.py
+
+#適当に作った分析ファイル
+analyze_hops.py
+check_checkpoints.py
+detect_hops.py
+ckpt/check_ckpt.py
