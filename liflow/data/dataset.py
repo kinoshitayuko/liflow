@@ -89,6 +89,8 @@ class NoisedFrameDataset(Dataset):
             prior = self.prior.sample(
                 temperature=row["temp"], masses=masses, shape=positions.shape
             )
+        elif isinstance(self.prior, (NormalPrior, UniformScaleNormalPrior)):
+            prior = self.prior.sample(shape=positions.shape)
         else:
             raise ValueError("Unsupported prior")
 

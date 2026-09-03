@@ -25,11 +25,23 @@ def main(cfg):
         datamodule = TimeDelayedPairDataModule(
             **cfg.data, prior=prior, seed=cfg.seed, neighbor_list_both_ends=False
         )
-        model = (
-            FlowModule(cfg)
-            if cfg.model.pretrained_ckpt is None
-            else FlowModule.load_from_checkpoint(cfg.model.pretrained_ckpt)
-        )
+        # model = (
+        #     FlowModule(cfg)
+        #     if cfg.model.pretrained_ckpt is None
+        #     else FlowModule.load_from_checkpoint(cfg.model.pretrained_ckpt)
+        # )
+        
+        if cfg.model.pretrained_ckpt is None:
+            # Pretrainを使わない場合（通常通り最新のcfgで初期化）
+            model = FlowModule(cfg)
+        else:
+            # Pretrainを使う場合（古いcfgを持ったモデルがロードされる）
+            model = FlowModule.load_from_checkpoint(cfg.model.pretrained_ckpt)
+            # ⬇️ 追加した1行：ロードされたモデルに最新のcfgを注入する
+            model.cfg = cfg
+            #print(f"[INFO] Loaded pretrained model with updated config.")
+            
+            
     elif cfg.task == "correct":
         noise = get_prior(cfg.correct_noise.class_name, **cfg.correct_noise.params)
         prior = get_prior(cfg.correct_prior.class_name, **cfg.correct_prior.params)

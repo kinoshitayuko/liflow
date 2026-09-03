@@ -61,7 +61,8 @@ class AdaptiveMaxwellBoltzmannPrior:
     ) -> np.ndarray:
         scale_Li = self.scale[0][scale_Li_index]
         scale_frame = self.scale[1][scale_frame_index]
-        prefactor = np.where(atomic_numbers == 3, scale_Li, scale_frame)
+        #prefactor = np.where(atomic_numbers == 3, scale_Li, scale_frame)
+        prefactor = np.where(atomic_numbers == 2, scale_Li, scale_frame)
         scale = prefactor * np.sqrt(units.kB * temperature / masses)
         return self.rng.normal(scale=scale[:, None], size=shape)
 

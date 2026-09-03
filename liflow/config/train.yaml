@@ -48,6 +48,7 @@ data:
   batch_size: 16
   num_train_samples: 4000
   num_valid_samples: 400
+  valid_fraction: 0.2
   train_valid_split: True
   sample_weight_comp: False
   num_workers: 32
@@ -77,7 +78,7 @@ trainer:
         monitor: valid/loss
         mode: min
         save_top_k: 1
-        save_last: null
+        save_last: True
         verbose: True
 
 logger:

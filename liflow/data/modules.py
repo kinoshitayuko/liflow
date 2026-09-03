@@ -24,6 +24,32 @@ def seed_worker(worker_id):
     dataset = torch.utils.data.get_worker_info().dataset
     dataset.load_data()  # reload npz arrays
 
+# # ← 変更①: ヘルパー関数を追加 ソートして後半をvalidにする（時系列的に近いものがtrain/valid両方に入るのを防ぐ）
+# def _temporal_train_valid_split(
+#     df: pd.DataFrame, valid_fraction: float
+# ) -> tuple[pd.DataFrame, pd.DataFrame]:
+#     df = df.sort_values(["name", "temp", "t_start"]).reset_index(drop=True)
+#     valid_indices = []
+#     for _, group in df.groupby(["name", "temp"], sort=False):
+#         n = len(group)
+#         n_valid = max(1, round(n * valid_fraction))
+#         valid_indices.extend(group.index[-n_valid:].tolist())
+#     mask = df.index.isin(valid_indices)
+#     return df[~mask].copy(), df[mask].copy()
+
+def _temporal_train_valid_split(
+    df: pd.DataFrame, valid_fraction: float
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df = df.sort_values(["name", "temp", "t_start"]).reset_index(drop=True)
+    valid_indices = []
+    for _, group in df.groupby(["name", "temp"], sort=False):
+        n = len(group)
+        step = max(1, round(1.0 / valid_fraction))  # valid_fraction=0.2 → step=5
+        # 0, 5, 10, 15, ... 番目をval → 全体に均等に分布
+        val_idx = group.index[::step].tolist()
+        valid_indices.extend(val_idx)
+    mask = df.index.isin(valid_indices)
+    return df[~mask].copy(), df[mask].copy()
 
 class NoisedFrameDataModule(L.LightningDataModule):
     def __init__(
@@ -37,6 +63,7 @@ class NoisedFrameDataModule(L.LightningDataModule):
         batch_size: int = 16,
         num_train_samples: int = 4000,
         num_valid_samples: int = 400,
+        valid_fraction: float = 0.2,        # ← 変更②: 追加
         train_valid_split: bool = True,
         sample_weight_comp: bool = False,
         num_workers: int = 0,
@@ -54,6 +81,7 @@ class NoisedFrameDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.num_train_samples = num_train_samples
         self.num_valid_samples = num_valid_samples
+        self.valid_fraction = valid_fraction        # ← 変更②: 追加
         self.train_valid_split = train_valid_split
         self.sample_weight_comp = sample_weight_comp
         self.num_workers = num_workers
@@ -65,20 +93,51 @@ class NoisedFrameDataModule(L.LightningDataModule):
     def setup(self, stage: str = None):
         # Load train + valid data
         df = pd.concat([pd.read_csv(self.data_path / f) for f in self.index_files])
+        # if self.train_valid_split:
+        #     # select num_valid_samples from df_train
+        #     self.df_valid = df.sample(
+        #         n=self.num_valid_samples, replace=False, random_state=self.seed
+        #     ).copy()
+        #     self.df_train = df.drop(self.df_valid.index).copy()
+        # else:
+        #     self.df_train = df.copy()
+        
+        # ← 変更③: 分割ロジックをまるごと差し替え
         if self.train_valid_split:
-            # select num_valid_samples from df_train
-            self.df_valid = df.sample(
-                n=self.num_valid_samples, replace=False, random_state=self.seed
-            ).copy()
-            self.df_train = df.drop(self.df_valid.index).copy()
+            self.df_train, self.df_valid = _temporal_train_valid_split(
+                df, self.valid_fraction
+            )
         else:
             self.df_train = df.copy()
 
+        # # 以下は元のコードのまま
+        # # Sample weights for training
+        # self.weights = np.ones(len(self.df_train), dtype=float)
+        # if self.sample_weight_comp:
+        #     comp_count = self.df_train.groupby("comp").transform("count")["name"]
+        #     self.weights *= 1.0 / comp_count.to_numpy()
+        
+        # 20260728追加: CSVのweight列をそのまま使うように変更
         # Sample weights for training
-        self.weights = np.ones(len(self.df_train), dtype=float)
-        if self.sample_weight_comp:
-            comp_count = self.df_train.groupby("comp").transform("count")["name"]
-            self.weights *= 1.0 / comp_count.to_numpy()
+        if "weight" in self.df_train.columns:
+            # 先ほど作成したCSVの "weight" 列をそのままサンプリングの確率に使う！
+            self.weights = self.df_train["weight"].to_numpy()
+            print("CSVから weight 列を読み込んでサンプリングに適用します。")
+        else:
+            # もし weight 列がない昔のCSVを読み込んだ時のための予備処理（今まで通り）
+            self.weights = np.ones(len(self.df_train), dtype=float)
+            if self.sample_weight_comp:
+                comp_count = self.df_train.groupby("comp").transform("count")["name"]
+                self.weights *= 1.0 / comp_count.to_numpy()
+                
+                
+        # Valid用の重み 20260730追加: CSVのweight列をそのまま使うように変更
+        if self.train_valid_split:
+            if "weight" in self.df_valid.columns:
+                self.valid_weights = self.df_valid["weight"].to_numpy()
+            else:
+                self.valid_weights = np.ones(len(self.df_valid), dtype=float)
+                
 
         dataset_kwargs = dict(
             data_path=self.data_path,
@@ -121,14 +180,44 @@ class NoisedFrameDataModule(L.LightningDataModule):
 
     def val_dataloader(self):
         if self.train_valid_split:
+            # 20260729修正: num_valid_samples が効くように sampler を追加
+            sampler = RandomSampler(
+                self.valid_dataset,
+                replacement=True,
+                num_samples=self.num_valid_samples,
+                generator=self.generator,
+            )
+            
+            # # 2026/07/29追加
+            # # WeightedRandomSampler で num_valid_samples 件サンプリング → 400サンプル
+            # sampler = WeightedRandomSampler(
+            # weights=self.valid_weights,
+            # num_samples=self.num_valid_samples,
+            # replacement=True,
+            # generator=self.generator,
+            # )
+            
             return DataLoader(
                 self.valid_dataset,
                 batch_size=self.batch_size,
-                shuffle=False,
+                sampler=sampler,           # ← 追加
+                #shuffle=False,
                 num_workers=self.num_workers,
                 worker_init_fn=seed_worker,
+                generator=self.generator,  # ← 追加
                 pin_memory=True,
+                # shuffle=False は sampler 使用時は指定しない（削除）
             )
+            
+            # #元々のコード
+            # return DataLoader(
+            #     self.valid_dataset,
+            #     batch_size=self.batch_size,
+            #     shuffle=False,
+            #     num_workers=self.num_workers,
+            #     worker_init_fn=seed_worker,
+            #     pin_memory=True,
+            # )
         else:  # sample from train dataset
             sampler = RandomSampler(
                 self.valid_dataset,
@@ -162,6 +251,7 @@ class TimeDelayedPairDataModule(L.LightningDataModule):
         batch_size: int = 16,
         num_train_samples: int = 4000,
         num_valid_samples: int = 400,
+        valid_fraction: float = 0.2,        # ← 変更②: 追加
         train_valid_split: bool = True,
         sample_weight_comp: bool = False,
         num_workers: int = 0,
@@ -179,6 +269,7 @@ class TimeDelayedPairDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.num_train_samples = num_train_samples
         self.num_valid_samples = num_valid_samples
+        self.valid_fraction = valid_fraction        # ← 変更②: 追加
         self.train_valid_split = train_valid_split
         self.sample_weight_comp = sample_weight_comp
         self.num_workers = num_workers
@@ -190,20 +281,51 @@ class TimeDelayedPairDataModule(L.LightningDataModule):
     def setup(self, stage: str = None):
         # Load train + valid data
         df = pd.concat([pd.read_csv(self.data_path / f) for f in self.index_files])
+        
+        # if self.train_valid_split:
+        #     # select num_valid_samples from df_train
+        #     self.df_valid = df.sample(
+        #         n=self.num_valid_samples, replace=False, random_state=self.seed
+        #     ).copy()
+        #     self.df_train = df.drop(self.df_valid.index).copy()
+        # else:
+        #     self.df_train = df.copy()
+        
+        # ← 変更③: 分割ロジックをまるごと差し替え（NoisedFrame と同じ）
         if self.train_valid_split:
-            # select num_valid_samples from df_train
-            self.df_valid = df.sample(
-                n=self.num_valid_samples, replace=False, random_state=self.seed
-            ).copy()
-            self.df_train = df.drop(self.df_valid.index).copy()
+            self.df_train, self.df_valid = _temporal_train_valid_split(
+                df, self.valid_fraction
+            )
         else:
             self.df_train = df.copy()
 
+        # # 以下は元のコードのまま
+        # # Sample weights for training
+        # self.weights = np.ones(len(self.df_train), dtype=float)
+        # if self.sample_weight_comp:
+        #     comp_count = self.df_train.groupby("comp").transform("count")["name"]
+        #     self.weights *= 1.0 / comp_count.to_numpy()
+            
+        # 20260728追加: CSVのweight列をそのまま使うように変更
         # Sample weights for training
-        self.weights = np.ones(len(self.df_train), dtype=float)
-        if self.sample_weight_comp:
-            comp_count = self.df_train.groupby("comp").transform("count")["name"]
-            self.weights *= 1.0 / comp_count.to_numpy()
+        if "weight" in self.df_train.columns:
+            # 先ほど作成したCSVの "weight" 列をそのままサンプリングの確率に使う！
+            self.weights = self.df_train["weight"].to_numpy()
+            print("CSVから weight 列を読み込んでサンプリングに適用します。")
+        else:
+            # もし weight 列がない昔のCSVを読み込んだ時のための予備処理（今まで通り）
+            self.weights = np.ones(len(self.df_train), dtype=float)
+            if self.sample_weight_comp:
+                comp_count = self.df_train.groupby("comp").transform("count")["name"]
+                self.weights *= 1.0 / comp_count.to_numpy()
+        
+        
+        # Valid用の重み 20260730追加: CSVのweight列をそのまま使うように変更
+        if self.train_valid_split:
+            if "weight" in self.df_valid.columns:
+                self.valid_weights = self.df_valid["weight"].to_numpy()
+            else:
+                self.valid_weights = np.ones(len(self.df_valid), dtype=float)
 
         dataset_kwargs = dict(
             data_path=self.data_path,
@@ -235,19 +357,66 @@ class TimeDelayedPairDataModule(L.LightningDataModule):
             replacement=True,
             generator=self.generator,
         )
+        
+        ## 20260804コメントアウト
+        # return DataLoader(
+        #     self.train_dataset,
+        #     batch_size=self.batch_size,
+        #     num_workers=self.num_workers,
+        #     worker_init_fn=seed_worker,
+        #     generator=self.generator,
+        #     sampler=sampler,
+        #     pin_memory=True,
+        #     persistent_workers=True,
+        # )
+        # 20260804修正: samplerを使う場合は shuffle=False にする必要があるので、明示的に指定
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
+            shuffle=True,
             num_workers=self.num_workers,
             worker_init_fn=seed_worker,
             generator=self.generator,
-            sampler=sampler,
+            #sampler=sampler,
             pin_memory=True,
             persistent_workers=True,
         )
+        
+        
 
     def val_dataloader(self):
         if self.train_valid_split:
+            # #2026/05/19追加
+            # # RandomSampler で num_valid_samples 件サンプリング → 400サンプル
+            # sampler = RandomSampler(
+            #     self.valid_dataset,
+            #     replacement=True,
+            #     num_samples=self.num_valid_samples,  # デフォルト 400
+            #     generator=self.generator,
+            # )
+            
+            # # 2026/07/30追加
+            # # WeightedRandomSampler で num_valid_samples 件サンプリング → 400サンプル
+            # sampler = WeightedRandomSampler(
+            # weights=self.valid_weights,
+            # num_samples=self.num_valid_samples,
+            # replacement=True,
+            # generator=self.generator,
+            # )
+            
+            # 20260804コメントアウト
+            # return DataLoader(
+            # self.valid_dataset,
+            # batch_size=self.batch_size,
+            # sampler=sampler,           # ← samplerを渡す
+            # num_workers=self.num_workers,
+            # worker_init_fn=seed_worker,
+            # generator=self.generator,  # ← generatorも渡す
+            # pin_memory=True,
+            # # shuffle=False は不要（sampler使用時は指定しない）
+            # )
+            
+            # 20260804修正: samplerを使う場合は shuffle=False にする必要があるので、明示的に指定
             return DataLoader(
                 self.valid_dataset,
                 batch_size=self.batch_size,
@@ -256,6 +425,7 @@ class TimeDelayedPairDataModule(L.LightningDataModule):
                 worker_init_fn=seed_worker,
                 pin_memory=True,
             )
+            
         else:  # sample from train dataset
             sampler = RandomSampler(
                 self.valid_dataset,

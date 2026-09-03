@@ -58,6 +58,36 @@ class DualPaiNN(nn.Module):
         unit_vectors_2, lengths_2 = get_unit_vectors_and_lengths(
             data["positions_2"], data["edge_index"], data["shifts"]
         )
+        
+        
+        # ↓↓↓ ここに挿入 ↓↓↓ 2026/07/29 追加
+        # min_len = lengths_2.min().item()
+        # if min_len < 10.5:  # 閾値は任意（Li-Li間で通常あり得ない近さ）
+        #     idx = torch.argmin(lengths_2)
+        #     atom_a, atom_b = data["edge_index"][:, idx].tolist()
+        #     elem_a = data["elements"][atom_a].item()
+        #     elem_b = data["elements"][atom_b].item()
+        #     if atom_a == 91 or atom_b == 91:  # H2原子のインデックスが91の場合
+        #         print(f"[WARNING] H2 bond too short: dist={min_len:.4f}Å atoms=({atom_a}:elem{elem_a}, {atom_b}:elem{elem_b})")
+        #     #print(f"[WARNING] dist={min_len:.4f}Å atoms=({atom_a}:elem{elem_a}, {atom_b}:elem{elem_b})")
+            
+        # ↑↑↑ ここまで ↑↑↑
+        
+        
+        # # ↓↓↓ ここに挿入：atom91専用の監視 ↓↓↓
+        # target_atom = 95
+        # mask = (data["edge_index"][0] == target_atom) | (data["edge_index"][1] == target_atom)
+        # if mask.any():
+        #     target_lengths = lengths_2[mask]
+        #     target_edges = data["edge_index"][:, mask]
+        #     min_idx_local = torch.argmin(target_lengths)
+        #     dist_91 = target_lengths[min_idx_local].item()
+        #     a, b = target_edges[:, min_idx_local].tolist()
+        #     print(f"[WATCH atom{target_atom}] dist={dist_91:.4f}Å pair=({a}:elem{data['elements'][a].item()}, {b}:elem{data['elements'][b].item()})")
+        # # ↑↑↑ ここまで ↑↑↑
+        
+        
+        
 
         # Compute radial basis functions
         lengths_1 = (lengths_1 + self.r_offset).clamp(max=self.r_max)
