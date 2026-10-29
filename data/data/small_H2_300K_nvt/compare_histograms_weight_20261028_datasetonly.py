@@ -49,8 +49,8 @@ MAX_WEIGHT = 10.0
 
 # 出力ファイル
 # グラフ・NPZ・CSVにはクリッピング前の重みを使用
-OUTPUT_PNG = "dataset_histogram_weights.png"
-OUTPUT_NPZ = "dataset_distance_weights.npz"
+OUTPUT_PNG = "dataset_histogram_weights_20261029.png"
+#OUTPUT_NPZ = "dataset_distance_weights.npz"
 OUTPUT_CSV = "dataset_distance_weights.csv"
 
 
@@ -418,20 +418,20 @@ def save_weight_table(
 ):
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
-    # クリッピング前の正規化済み重みを保存
-    np.savez(
-        OUTPUT_NPZ,
-        bin_edges=bin_edges,
-        bin_weights=weights,
-        bin_counts=counts,
-        bin_probabilities=probabilities,
-        occupied_bins=occupied,
-        alpha=ALPHA,
-        epsilon=EPSILON,
-        lag=LAG_TRUE,
-        species=species_target,
-        source_file=TRUE_XYZ_FILE,
-    )
+    # # クリッピング前の正規化済み重みを保存
+    # np.savez(
+    #     OUTPUT_NPZ,
+    #     bin_edges=bin_edges,
+    #     bin_weights=weights,
+    #     bin_counts=counts,
+    #     bin_probabilities=probabilities,
+    #     occupied_bins=occupied,
+    #     alpha=ALPHA,
+    #     epsilon=EPSILON,
+    #     lag=LAG_TRUE,
+    #     species=species_target,
+    #     source_file=TRUE_XYZ_FILE,
+    # )
 
     table = np.column_stack(
         [
@@ -470,7 +470,7 @@ def save_weight_table(
         ],
     )
 
-    print(f"重みテーブルを保存しました: {OUTPUT_NPZ}")
+    # print(f"重みテーブルを保存しました: {OUTPUT_NPZ}")
     print(f"確認用CSVを保存しました   : {OUTPUT_CSV}")
     print("※ NPZ・CSVもクリッピング前の重みです。")
 
