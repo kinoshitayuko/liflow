@@ -27,22 +27,22 @@ python -m liflow.experiment.train \
     #propagate_prior.params.scale="[[1.0,10.0],[0.5,0.5]]"
     #trainer.callbacks.early_stopping.patience=5
 
-python -m liflow.experiment.train \
-    task=propagate \
-    name=P_TiO2SiO2_H2_20261029_2 \
-    data.data_path=../data/data/small_H2_300K_nvt \
-    data.index_files="[train_1000ps_20260728_1.csv]" \
-    data.train_valid_split=True \
-    data.sample_weight_comp=False \
-    data.time_delay_steps=50 \
-    data.in_memory=True \
-    propagate_prior.class_name=GaussianMixtureAdaptivePrior \
-    propagate_prior.params.scale="[[36.0,36.0],[0.001,0.001]]" \
-    optimizer.lr=3e-06 \
-    data.batch_size=128 \
-    model.r_max=5.0 \
-    data.cutoff=5.0 \
-    +active_learning_weight=True
+# python -m liflow.experiment.train \
+#     task=propagate \
+#     name=P_TiO2SiO2_H2_20261029_2 \
+#     data.data_path=../data/data/small_H2_300K_nvt \
+#     data.index_files="[train_1000ps_20260728_1.csv]" \
+#     data.train_valid_split=True \
+#     data.sample_weight_comp=False \
+#     data.time_delay_steps=50 \
+#     data.in_memory=True \
+#     propagate_prior.class_name=GaussianMixtureAdaptivePrior \
+#     propagate_prior.params.scale="[[36.0,36.0],[0.001,0.001]]" \
+#     optimizer.lr=3e-06 \
+#     data.batch_size=128 \
+#     model.r_max=5.0 \
+#     data.cutoff=5.0 \
+#     +active_learning_weight=True
 
 
 
