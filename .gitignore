@@ -14,16 +14,31 @@ venv/
 *.pth
 *.xyz
 *.png
+*.cif
+*.gz
+*.lammpstrj
+*.lammps
+*.npz
+*.mp4
+data.tar.gz.part.*
+*.html
+*.out
+*.npy
+*.modeldevi
+*.sid
+*.data
+TiO2_SiO2_small*.restart.*
+*.log
 
 # Data and generated trajectories
-/data/
-scripts/traj_output_*/
-scripts/outputs/
+#/data/
+#scripts/traj_output_*/
+#scripts/outputs/
 
 # Training / experiment files
-scripts/train_*.sh
-scripts/finetune_*.sh
-scripts/test_*.py
+#scripts/train_*.sh
+#scripts/finetune_*.sh
+#scripts/test_*.py
 
 # Training / experiment logs
 lightning_logs/
@@ -31,6 +46,7 @@ wandb/
 scripts/lightning_logs/
 scripts/wandb/
 scripts/velocity_logs/
+scripts/outputs/
 
 # Other generated outputs
 output.pptx

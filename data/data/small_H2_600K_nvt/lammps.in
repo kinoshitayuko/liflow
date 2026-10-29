@@ -1,0 +1,49 @@
+#Variables
+variable structure index  TiO2_SiO2_small_H2
+variable MD_temp   index  "600"
+variable MD_press  index  "1"
+variable MD_T_E    index  "200000"
+variable MD_T_P    index  "2000000"
+variable MD_dt     index  "20"
+variable TH_dt     index  "20"
+
+#===========================================================
+# GENERAL PROCEDURES
+#===========================================================
+units        metal
+dimension    3
+boundary     p p p
+
+atom_style   atomic
+read_data    ${structure}.data
+neighbor     2.0 bin
+neigh_modify delay 0 every 10 check yes
+
+#===========================================================
+# FORCE FIELD DEFINITION
+#===========================================================
+pair_style   deepmd ../../graph0_compressed.pb ../../graph1_compressed.pb ../../graph2_compressed.pb ../../graph3_compressed.pb out_freq ${MD_dt} out_file log.modeldevi
+pair_coeff   * * H O Si Ti He
+
+#===========================================================
+# SETUP SIMULATIONS
+#===========================================================
+timestep     0.0005
+run_style    verlet
+velocity     all create ${MD_temp} 12345 mom yes rot yes dist gaussian
+thermo       ${TH_dt}
+thermo_style custom step time temp press pe ke etotal evdwl enthalpy vol density lx ly lz pxx pyy pzz pxy pxz pyz
+log          log.lammps append
+restart      ${MD_T_E} ${structure}.restart
+
+#===========================================================
+# RUN Dynamics 
+#===========================================================
+# fix          1 all npt temp ${MD_temp} ${MD_temp} $(100.0*dt) iso ${MD_press} ${MD_press} $(1000.0*dt)
+fix          1 all nvt temp ${MD_temp} ${MD_temp} $(100.0*dt)
+fix          2 all momentum 10 linear 1 1 1 rescale
+dump         1 all custom ${MD_dt} log.lammpstrj id element xu yu zu vx vy vz fx fy fz
+dump_modify  1 sort id element H O Si Ti He
+
+run          ${MD_T_P}
+write_data   ${structure}_*.data
