@@ -43,7 +43,9 @@ parser.add_argument("--output-dir", type=str, default="traj_output_TiO2SiO2_H2")
 #parser.add_argument("--propagate-ckpt", type=str, default="ckpt/P_TiO2SiO2_H2_20250926_1-v5.ckpt")
 #parser.add_argument("--propagate-ckpt", type=str, default="ckpt/P_TiO2SiO2_H2_20250825_1-v1.ckpt")
 # parser.add_argument("--propagate-ckpt", type=str, default="ckpt/P_TiO2SiO2_H2_20260924_1.ckpt")
-parser.add_argument("--propagate-ckpt", type=str, default="ckpt/P_TiO2SiO2_H2_20261029_1.ckpt")
+# parser.add_argument("--propagate-ckpt", type=str, default="ckpt/P_TiO2SiO2_H2_20261029_1-v1.ckpt")
+parser.add_argument("--propagate-ckpt", type=str, default="ckpt/P_TiO2SiO2_H2_20261102_1.ckpt")
+# parser.add_argument("--propagate-ckpt", type=str, default="ckpt/P_TiO2SiO2_H2_20261029_fixed_weighted_1.ckpt")
 #parser.add_argument("--propagate-ckpt", type=str, default="ckpt/P_TiO2SiO2_H2_20261006_1_finetune.ckpt")
 #parser.add_argument("--propagate-ckpt", type=str, default="ckpt/P_TiO2SiO2_H2_20250825_1.ckpt")
 #parser.add_argument("--correct-ckpt", type=str, default="ckpt/C_TiO2SiO2_H2_1.0_20260722_1.ckpt")
@@ -233,4 +235,6 @@ for temperature in args.temp_list:
     #     )
     #     for i in range(len(traj))
     # ]
-    ase.io.write(output_dir / f"traj_{temperature}K_{args.seed}_20261030_unweighted_normal_1.xyz", traj_atoms)
+    
+    ase.io.write(output_dir / f"traj_{temperature}K_{args.seed}_20261030_unweighted_normal_3_2.xyz", traj_atoms)
+    # ase.io.write(output_dir / f"traj_{temperature}K_{args.seed}_20261030_fixed_weighted_10n_1.xyz", traj_atoms)

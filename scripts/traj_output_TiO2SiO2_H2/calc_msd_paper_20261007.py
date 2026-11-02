@@ -361,7 +361,9 @@ target_temp = 300  # 比較する温度 (K)
 liflow_files = {
     #"Inference": "traj_300K_42_20261007_1_10n.xyz",
     # "Inference": "traj_300K_42_20261019_propose_1.xyz",
-    "Inference": "traj_300K_42_20261014_finetune_1.xyz",
+    # "Inference": "traj_300K_42_20261014_finetune_1.xyz",
+    "Inference": "traj_300K_42_20261030_unweighted_normal_2.xyz",
+    # "Inference": "traj_300K_42_20261030_fixed_weighted_1.xyz",
     #"Inference": "traj_300K_44_20260817_finetune_1.xyz",
     #"Inference": "traj_300K_44_20260817_finetune_1_10n.xyz",
 }
@@ -488,13 +490,16 @@ ax.set_xlabel(r"Lag time, $\tau$ (ps)")
 ax.set_ylabel(r"MSD($\tau$) ($\mathrm{\AA^2}$)")
 # ax.set_title("MSD: Two-Component Gaussian Mixture Prior(1ns Rollout)", pad=10)
 #ax.set_title("MSD: After Fine-tuning (10ns Rollout)", pad=10)
-ax.set_title("MSD: After Fine-tuning (1ns Rollout)", pad=10)
+# ax.set_title("MSD: After Fine-tuning (1ns Rollout)", pad=10)
+ax.set_title("MSD: Unweighted Normal (1ns Rollout)", pad=10)
+# ax.set_title("MSD: Fixed Weighted (1ns Rollout)", pad=10)
 ax.legend(frameon=True)
 ax.grid(True, linestyle=":", alpha=0.6)
 
 plt.tight_layout(pad=0.5)
 
-save_filename = f"msd_comparison_{target_temp}K_20261019_after_finetune_1.png"
+save_filename = f"msd_comparison_{target_temp}K_20261102_unweighted_normal_re.png"
+# save_filename = f"msd_comparison_{target_temp}K_20261102_fixed_weighted_1.png"
 plt.savefig(save_filename, dpi=300)
 print(f"\n比較グラフを {save_filename} に保存しました。")
 plt.show()

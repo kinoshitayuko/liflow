@@ -520,7 +520,8 @@ class FlowModule(L.LightningModule):
         filename = (
             "loss_by_H_displacement_epoch_fixed_weighted_20261029.csv"
             if use_active_weight
-            else "loss_by_H_displacement_epoch_unweighted_normal_20261029.csv"
+            # else "loss_by_H_displacement_epoch_unweighted_normal_20261029.csv"
+            else "loss_by_H_displacement_epoch_unweighted_normal_20261102.csv"
         )
 
         csv_path = os.path.join(
