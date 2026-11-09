@@ -24,8 +24,13 @@ plt.rcParams.update(
 # =========================================================
 TRUE_XYZ_FILE = "output.xyz"
 # GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20261007_1_10n.xyz"
-GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20260924_1_10n.xyz"
-OUTPUT_PNG = "displacement_hist_xyz_20261007_10ns_before.png"  # 保存ファイル名
+# GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20260924_1_10n.xyz"
+# OUTPUT_PNG = "displacement_hist_xyz_20261007_10ns_before.png"  # 保存ファイル名
+# GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20261030_fixed_weighted_1.xyz"
+# OUTPUT_PNG = "displacement_hist_xyz_20261104_fixed_weighted_1ns.png"  # 保存ファイル名
+
+GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20261109_logtransformation_2.xyz"
+OUTPUT_PNG = "displacement_hist_xyz_20261106_logtransformation_1ns_2.png"  # 保存ファイル名
 
 species_target = 'He'  # 対象原子種（Hの場合は 'H' に変更）
 

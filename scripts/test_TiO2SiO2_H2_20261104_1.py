@@ -75,7 +75,7 @@ set_seed(args.seed)
 
 #parser.add_argument("--corrector-every", type=int, default=1)
 parser.add_argument("--corrector-every", type=int, default=1)  # 1ステップごとにコレクターを適用
-parser.add_argument("--num-retries", type=int, default=3)
+parser.add_argument("--num-retries", type=int, default=0)
 
 #parser.add_argument("--num-retries", type=int, default=0)
 
@@ -236,5 +236,5 @@ for temperature in args.temp_list:
     #     for i in range(len(traj))
     # ]
     
-    ase.io.write(output_dir / f"traj_{temperature}K_{args.seed}_20261104_logtransformation_1.xyz", traj_atoms)
+    ase.io.write(output_dir / f"traj_{temperature}K_{args.seed}_20261106_logtransformation_1.xyz", traj_atoms)
     # ase.io.write(output_dir / f"traj_{temperature}K_{args.seed}_20261030_fixed_weighted_10n_1.xyz", traj_atoms)

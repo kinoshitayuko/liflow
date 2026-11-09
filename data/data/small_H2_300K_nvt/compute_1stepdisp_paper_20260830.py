@@ -32,8 +32,11 @@ TRUE_XYZ_FILE = "output.xyz"
 #GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20261007_1.xyz"  # モデル生成データ
 # GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20261007_1_10n.xyz"  # モデル生成データ
 #GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20261019_propose_1.xyz"  # モデル生成データ
-GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20261014_finetune_1.xyz"  # モデル生成データ
-OUTPUT_PNG = "histogram_1stepdisp_20261019_after_finetune_1ns.png"
+# GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20261014_finetune_1.xyz"  # モデル生成データ
+# GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20261030_fixed_weighted_1.xyz"  # モデル生成データ
+# OUTPUT_PNG = "histogram_1stepdisp_20261104_fixed_weighted_1ns.png"
+GEN_XYZ_FILE = "../../../scripts/traj_output_TiO2SiO2_H2/traj_300K_42_20261109_logtransformation_2.xyz"
+OUTPUT_PNG = "histogram_1stepdisp_20261106_logtransformation_1ns_2.png"  # 保存ファイル名
 
 species_target = 'He'
 
@@ -211,7 +214,9 @@ if __name__ == "__main__":
     ax.set_ylabel('Count')
     #ax.set_title('Baseline (10ns Rollout)', pad=10)
     # ax.set_title('Proposed (1ns Rollout)', pad=10)
-    ax.set_title('After Fine-tuning (1ns Rollout)', pad=10)
+    # ax.set_title('After Fine-tuning (1ns Rollout)', pad=10)
+    # ax.set_title('After Fixed Weighted (1ns Rollout)', pad=10)
+    ax.set_title('After Log Transformation (1ns Rollout)', pad=10)
 
     ax.legend(loc='upper right', frameon=True)
     ax.grid(True, linestyle='--', alpha=0.5)

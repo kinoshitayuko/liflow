@@ -362,6 +362,7 @@ liflow_files = {
     #"Inference": "traj_300K_42_20261007_1_10n.xyz",
     # "Inference": "traj_300K_42_20261019_propose_1.xyz",
     # "Inference": "traj_300K_42_20261014_finetune_1.xyz",
+    # "Inference": "traj_300K_42_20261030_unweighted_normal_2.xyz",
     "Inference": "traj_300K_42_20261030_unweighted_normal_2.xyz",
     # "Inference": "traj_300K_42_20261030_fixed_weighted_1.xyz",
     #"Inference": "traj_300K_44_20260817_finetune_1.xyz",

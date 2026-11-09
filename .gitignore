@@ -29,6 +29,8 @@ data.tar.gz.part.*
 *.data
 TiO2_SiO2_small*.restart.*
 *.log
+flow_debug_*
+oxygen_check_*
 
 # Data and generated trajectories
 #/data/
