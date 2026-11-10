@@ -51,7 +51,7 @@ parser.add_argument("--propagate-ckpt", type=str, default="ckpt/P_TiO2SiO2_H2_20
 #parser.add_argument("--correct-ckpt", type=str, default="ckpt/C_TiO2SiO2_H2_1.0_20260722_1.ckpt")
 #parser.add_argument("--correct-ckpt", type=str, default="ckpt/C_TiO2SiO2_H2_0.5_20260924_1.ckpt")
 # parser.add_argument("--correct-ckpt", type=str, default="ckpt/C_TiO2SiO2_H2_0.5_20261014_1.ckpt")
-parser.add_argument("--correct-ckpt", type=str, default="ckpt/C_TiO2SiO2_H2_0.5_20261106_1.ckpt")
+parser.add_argument("--correct-ckpt", type=str, default="ckpt/C_TiO2SiO2_H2_0.5_20261014_1.ckpt")
 
 
 # Simulation parameters: number of steps, flow integration steps, solver
@@ -237,5 +237,5 @@ for temperature in args.temp_list:
     #     for i in range(len(traj))
     # ]
     
-    ase.io.write(output_dir / f"traj_{temperature}K_{args.seed}_20261109_logtransformation_2_2.xyz", traj_atoms)
+    ase.io.write(output_dir / f"traj_{temperature}K_{args.seed}_20261109_logtransformation_2_test.xyz", traj_atoms)
     # ase.io.write(output_dir / f"traj_{temperature}K_{args.seed}_20261030_fixed_weighted_10n_1.xyz", traj_atoms)

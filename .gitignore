@@ -31,6 +31,7 @@ TiO2_SiO2_small*.restart.*
 *.log
 flow_debug_*
 oxygen_check_*
+propagator_from_reference_md_*
 
 # Data and generated trajectories
 #/data/
