@@ -14,6 +14,8 @@ from liflow.utils.prior import (
     Prior,
     UniformScaleNormalPrior,
 )
+#20261112 現在座標をラティス内にラップするための関数をインポート
+from ase.geometry import wrap_positions
 
 
 class NoisedFrameDataset(Dataset):
@@ -165,6 +167,43 @@ class TimeDelayedPairDataset(Dataset):
         positions_1 = self.positions[row["temp"]][row["name"]][start_time]
         positions_2 = self.positions[row["temp"]][row["name"]][end_time]
         lattice = self.lattice[row["name"]]
+        
+        
+        #20261112 現在座標をラティス内にラップするための処理を追加
+        # Original displacement from the unwrapped trajectory.
+        displacement_original = positions_2 - positions_1
+
+        # Move the starting structure into the cell.
+        positions_1_wrapped = wrap_positions(
+            positions_1,
+            cell=lattice,
+            pbc=self.pbc,
+            eps=0.0,
+        )
+
+        # Apply the same coordinate shift to the ending structure.
+        coordinate_shift = positions_1 - positions_1_wrapped
+        positions_1 = positions_1_wrapped
+        positions_2 = positions_2 - coordinate_shift
+
+        # Check that the displacement has not changed.
+        assert np.allclose(
+            positions_2 - positions_1,
+            displacement_original,
+            rtol=1e-6,
+            atol=1e-6,
+        ), "Teacher displacement changed after wrapping."
+        
+        # print(
+        #     "pbc =", self.pbc,
+        #     "| max coordinate shift =", np.max(np.abs(coordinate_shift)),
+        #     "| max displacement error =",
+        #     np.max(np.abs(
+        #         (positions_2 - positions_1) - displacement_original
+        #     )),
+        # )
+        #20261112 ここまで追加
+        
 
         # Get edge information
         edge_index, shifts = get_neighbor_list_batch(

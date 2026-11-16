@@ -1023,12 +1023,12 @@ class FlowModule(L.LightningModule):
         outputs = self(flow_batch, t_per_graph=t)
         loss, errors = self._compute_loss_details(outputs, target)
         if not torch.isfinite(loss):
-            self._loss_stats["train"]["nonfinite_batches"] += 1
+            # self._loss_stats["train"]["nonfinite_batches"] += 1
             self.print(f"[WARNING] Skipping batch {batch_idx}, "
                        f"epoch={self.current_epoch}, loss={loss.item()}")
             # Existing single-GPU automatic-optimization behavior.
             return None
-        self._accumulate_loss_stats("train", errors, batch["elements"], disp)
+        #self._accumulate_loss_stats("train", errors, batch["elements"], disp)
         self.log("train/loss", loss, on_step=True, on_epoch=True,
                  prog_bar=True, batch_size=batch.num_graphs)
         return loss
@@ -1051,11 +1051,11 @@ class FlowModule(L.LightningModule):
                 nonfinite = True
                 self.print(f"[WARNING] Nonfinite validation: epoch={self.current_epoch}, "
                            f"batch={batch_idx}, t={t.item():.4f}, loss={loss.item()}")
-            elif record:
-                self._accumulate_loss_stats("valid", errors, batch["elements"], disp)
+            # elif record:
+            #     self._accumulate_loss_stats("valid", errors, batch["elements"], disp)
             losses.append(loss)
-        if record and nonfinite:
-            self._loss_stats["valid"]["nonfinite_batches"] += 1
+        # if record and nonfinite:
+        #     self._loss_stats["valid"]["nonfinite_batches"] += 1
         loss = torch.stack(losses).mean()
         self.log("valid/loss", loss, on_epoch=True, batch_size=batch.num_graphs)
         return loss
@@ -1149,11 +1149,13 @@ class FlowModule(L.LightningModule):
         self._reset_loss_stats("train")
 
     def on_train_epoch_end(self):
-        self._write_loss_stats("train")
+        # self._write_loss_stats("train")
+        pass
 
     def on_validation_epoch_start(self):
         self._reset_loss_stats("valid")
 
     def on_validation_epoch_end(self):
-        if not self.trainer.sanity_checking:
-            self._write_loss_stats("valid")
+        # if not self.trainer.sanity_checking:
+        #     self._write_loss_stats("valid")
+        pass

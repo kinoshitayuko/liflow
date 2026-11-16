@@ -1,4 +1,5 @@
 # """Flow simulation with signed-log integration, retries and failure diagnostics."""
+#csvは出力しない。
 # import json
 # import tempfile
 # from pathlib import Path
@@ -408,6 +409,7 @@
 
 
 """Flow simulation with signed-log integration, retries and CSV diagnostics."""
+#csvは出力する。
 
 import csv
 import json
@@ -429,6 +431,8 @@ from liflow.utils.prior import (
     Prior,
     UniformScaleNormalPrior,
 )
+
+from ase.geometry import wrap_positions
 
 
 class NonFiniteFlowError(RuntimeError):
@@ -1289,6 +1293,21 @@ class FlowSimulator:
                 ) - previous
             ),
         }
+        
+        # 20261116追加
+        # Signed-log: final displacement before/after inverse transform.
+        if self._signed(self.propagate_model):
+            stages.update({
+                "transformed_final": np.asarray(
+                    arrays["prop_final_z"],
+                    dtype=np.float64,
+                ),
+                "inverse_final": np.asarray(
+                    arrays["prop_final_displacement"],
+                    dtype=np.float64,
+                ),
+            })
+        
 
         expected_shape = (
             len(self.atomic_numbers),
@@ -1362,10 +1381,31 @@ class FlowSimulator:
         solver: str = "euler",
         use_corrector: bool = True,
     ) -> np.ndarray:
-        data = self.initialize_batch(
+        # data = self.initialize_batch(
+        #     positions,
+        #     self.propagate_prior,
+        # )
+        
+        # 20261112: 累積座標はunwrappedで保持し、
+        # Propagatorへの開始入力だけをwrapする。
+        # Keep the cumulative coordinates unwrapped.
+        positions = np.asarray(positions)
+
+        # Wrap only the starting structure supplied to the Propagator.
+        positions_wrapped = wrap_positions(
             positions,
+            cell=self.lattice,
+            pbc=self.pbc,
+            eps=0.0,
+        )
+        coordinate_shift = positions - positions_wrapped
+
+        data = self.initialize_batch(
+            positions_wrapped,
             self.propagate_prior,
         )
+        
+        
 
         self.diagnostics.put(
             "prop_sampled_prior",
@@ -1399,6 +1439,11 @@ class FlowSimulator:
             tag="prop",
             diagnostics=self.diagnostics,
         ).detach().cpu().numpy()
+        
+        # 20261112: 入力時に引いた座標シフトを戻し、
+        # 出力を元のunwrapped座標表現に戻す。
+        # Restore the original unwrapped coordinate representation.
+        new_positions = new_positions + coordinate_shift
 
         self.diagnostics.record(
             "prop",
