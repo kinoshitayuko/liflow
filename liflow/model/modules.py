@@ -857,6 +857,315 @@
 #         return loss
 
 
+
+
+# # -*- coding: utf-8 -*-
+# """LiFlow training with optional element-wise signed-log flow (plan A).
+
+# Signed-log ON: physical coordinate inputs, transformed velocity outputs.
+# Signed-log OFF: original physical-space flow. No fixed loss weighting.
+# The inference integrator must separately support signed-log checkpoints.
+# """
+# import csv
+# import os
+
+# import lightning as L
+# import torch
+# from omegaconf import DictConfig, OmegaConf
+# from torch_geometric.data import Batch
+
+# from liflow.model.models import DualPaiNN
+# from liflow.utils.transforms import SignedLogTransform
+
+
+# TARGET_ELEM_ID = 1
+# DISP_LOG_BINS_A = (0.0, 1.0, 3.0, float("inf"))
+
+
+# class FlowModule(L.LightningModule):
+#     def __init__(self, cfg: DictConfig, signed_log_parameters=None,
+#                  signed_log_enabled=None):
+#         super().__init__()
+#         self.cfg = cfg if isinstance(cfg, DictConfig) else OmegaConf.create(cfg)
+#         section = self.cfg.get("signed_log", {})
+#         requested = section.get("enabled", False)
+#         if type(requested) is not bool:
+#             raise ValueError("signed_log.enabled must be True or False")
+#         if signed_log_enabled is not None and type(signed_log_enabled) is not bool:
+#             raise ValueError("signed_log_enabled must be a bool")
+#         # Explicit constructor argument is checkpoint-owned when restoring.
+#         self.signed_log_enabled = (requested if signed_log_enabled is None
+#                                    else signed_log_enabled)
+#         if self.signed_log_enabled != requested:
+#             raise ValueError("Checkpoint/config signed-log settings disagree")
+#         if self.cfg.get("active_learning_weight", False):
+#             raise ValueError("Fixed loss weighting was removed; remove active_learning_weight=True")
+#         self._prediction_mode = str(self.cfg.model.prediction_mode)
+#         self._validate_mode()
+
+#         self.model = DualPaiNN(
+#             num_features=self.cfg.model.num_features,
+#             num_radial_basis=self.cfg.model.num_radial_basis,
+#             num_layers=self.cfg.model.num_layers,
+#             num_elements=self.cfg.model.num_elements,
+#             r_max=self.cfg.model.r_max,
+#             r_offset=self.cfg.model.r_offset,
+#             ref_temp=self.cfg.model.ref_temp,
+#         )
+#         self.displacement_transform = None
+#         payload = None
+#         if self.signed_log_enabled:
+#             if signed_log_parameters is None:
+#                 path = section.get("parameters_path", None)
+#                 if not path:
+#                     raise ValueError("Set signed_log.parameters_path for a new signed-log model")
+#                 self.displacement_transform = SignedLogTransform.from_json(path)
+#             else:
+#                 if OmegaConf.is_config(signed_log_parameters):
+#                     signed_log_parameters = OmegaConf.to_container(
+#                         signed_log_parameters, resolve=True)
+#                 self.displacement_transform = SignedLogTransform(signed_log_parameters)
+#             payload = self.displacement_transform.export_parameters()
+#             ids = payload["elements"]
+#             if max(x["element_id"] for x in ids) >= self.cfg.model.num_elements:
+#                 raise ValueError("Transform ID exceeds cfg.model.num_elements")
+#             delay = self.cfg.data.get("time_delay_steps", None)
+#             if delay is not None and payload.get("lag_frames") != int(delay):
+#                 raise ValueError("JSON lag_frames differs from data.time_delay_steps")
+
+#         self.save_hyperparameters({
+#             "cfg": self.cfg,
+#             "signed_log_parameters": payload,
+#             "signed_log_enabled": self.signed_log_enabled,
+#         })
+#         self._loss_stats = {}
+
+#     @property
+#     def error_space(self):
+#         if self.signed_log_enabled:
+#             return "transformed_velocity"
+#         return ("physical_velocity" if self._prediction_mode == "velocity"
+#                 else "physical_displacement")
+
+#     def _validate_mode(self):
+#         if self._prediction_mode not in ("velocity", "data"):
+#             raise ValueError(f"Unknown prediction mode: {self._prediction_mode}")
+#         if self.signed_log_enabled and self._prediction_mode != "velocity":
+#             raise ValueError("Signed-log plan A currently supports velocity mode only")
+
+#     def setup(self, stage: str):
+#         pass
+
+#     def on_fit_start(self):
+#         # Fail if train.py replaced model.cfg with incompatible settings.
+#         requested = self.cfg.get("signed_log", {}).get("enabled", False)
+#         if type(requested) is not bool or requested != self.signed_log_enabled:
+#             raise ValueError("model.cfg was changed incompatibly after model construction")
+#         if str(self.cfg.model.prediction_mode) != self._prediction_mode:
+#             raise ValueError("prediction_mode changed after model construction")
+#         if self.cfg.get("active_learning_weight", False):
+#             raise ValueError("Fixed loss weighting is not supported")
+#         self.print(f"[Flow] signed_log={self.signed_log_enabled}, "
+#                    f"prediction_mode={self._prediction_mode}, error_space={self.error_space}, "
+#                    "loss=unweighted mean over ALL atoms")
+#         if self.signed_log_enabled:
+#             self.print("[Flow] plan A: physical coordinate input -> transformed velocity output")
+#             self.print(f"[Flow] transform IDs={self.displacement_transform.species_by_id}")
+
+#     def on_load_checkpoint(self, checkpoint):
+#         # Protect against silently interpreting an old physical model as transformed.
+#         hp = checkpoint.get("hyper_parameters", {})
+#         saved = hp.get("signed_log_enabled", False)
+#         if saved != self.signed_log_enabled:
+#             raise ValueError("Checkpoint flow space differs from the constructed model")
+#         if self.signed_log_enabled and not hp.get("signed_log_parameters"):
+#             raise ValueError("Signed-log checkpoint lacks construction parameters")
+
+#     def forward(self, batch: Batch, t_per_graph: torch.Tensor):
+#         batch["time"] = t_per_graph[batch.batch]
+#         return self.model(batch)
+
+#     def _prepare_flow(self, original: Batch, t_per_graph: torch.Tensor):
+#         # Clone to keep validation inputs independent of previous time evaluations.
+#         batch = original.clone()
+#         reference = original["positions_1"].clone()
+#         endpoint = original["positions_2"]
+#         disp = (endpoint - reference).clone()
+#         prior = original["prior"]
+#         t = t_per_graph[original.batch][:, None]
+#         if self.signed_log_enabled:
+#             elements = original["elements"]
+#             z0 = self.displacement_transform.transform(prior, elements)
+#             z1 = self.displacement_transform.transform(disp, elements)
+#             zt = (1.0 - t) * z0 + t * z1
+#             physical_disp = self.displacement_transform.inverse(zt, elements)
+#             batch["positions_1"] = reference
+#             batch["positions_2"] = reference + physical_disp
+#             target = z1 - z0
+#         else:
+#             # Preserve the arithmetic order of the original physical-space code.
+#             initial = reference + prior
+#             batch["positions_1"] = reference
+#             batch["positions_2"] = (1.0 - t) * initial + t * endpoint
+#             target = endpoint - initial if self._prediction_mode == "velocity" else disp
+#         return batch, target, disp
+
+#     def _compute_loss_details(self, outputs, targets):
+#         if outputs.shape != targets.shape or outputs.ndim != 2 or outputs.shape[1] != 3:
+#             raise ValueError("Outputs and targets must both have shape [N, 3]")
+#         per_atom_sq_err = (outputs - targets).pow(2).sum(-1)
+#         return per_atom_sq_err.mean(), per_atom_sq_err
+
+#     def compute_loss(self, outputs, targets):
+#         return self._compute_loss_details(outputs, targets)[0]
+
+#     def training_step(self, batch: Batch, batch_idx: int):
+#         t = torch.rand((batch.num_graphs,), device=self.device, dtype=torch.float)
+#         flow_batch, target, disp = self._prepare_flow(batch, t)
+#         outputs = self(flow_batch, t_per_graph=t)
+#         loss, errors = self._compute_loss_details(outputs, target)
+#         if not torch.isfinite(loss):
+#             # self._loss_stats["train"]["nonfinite_batches"] += 1
+#             self.print(f"[WARNING] Skipping batch {batch_idx}, "
+#                        f"epoch={self.current_epoch}, loss={loss.item()}")
+#             # Existing single-GPU automatic-optimization behavior.
+#             return None
+#         #self._accumulate_loss_stats("train", errors, batch["elements"], disp)
+#         self.log("train/loss", loss, on_step=True, on_epoch=True,
+#                  prog_bar=True, batch_size=batch.num_graphs)
+#         return loss
+
+#     @torch.no_grad()
+#     def validation_step(self, batch: Batch, batch_idx: int):
+#         ntime = self.cfg.valid.num_time_steps
+#         if ntime < 1:
+#             raise ValueError("valid.num_time_steps must be >= 1")
+#         t_list = torch.linspace(0.0, 1.0, ntime, device=self.device, dtype=torch.float)
+#         losses = []
+#         record = not self.trainer.sanity_checking
+#         nonfinite = False
+#         for t in t_list:
+#             t_per_graph = t.expand(batch.num_graphs).clone()
+#             flow_batch, target, disp = self._prepare_flow(batch, t_per_graph)
+#             outputs = self(flow_batch, t_per_graph=t_per_graph)
+#             loss, errors = self._compute_loss_details(outputs, target)
+#             if not torch.isfinite(loss):
+#                 nonfinite = True
+#                 self.print(f"[WARNING] Nonfinite validation: epoch={self.current_epoch}, "
+#                            f"batch={batch_idx}, t={t.item():.4f}, loss={loss.item()}")
+#             # elif record:
+#             #     self._accumulate_loss_stats("valid", errors, batch["elements"], disp)
+#             losses.append(loss)
+#         # if record and nonfinite:
+#         #     self._loss_stats["valid"]["nonfinite_batches"] += 1
+#         loss = torch.stack(losses).mean()
+#         self.log("valid/loss", loss, on_epoch=True, batch_size=batch.num_graphs)
+#         return loss
+
+#     def configure_optimizers(self):
+#         if self.cfg.optimizer.class_name != "Adam":
+#             raise ValueError(f"Unknown optimizer: {self.cfg.optimizer.class_name}")
+#         return torch.optim.Adam(self.model.parameters(), lr=self.cfg.optimizer.lr)
+
+#     def _reset_loss_stats(self, stage):
+#         self._loss_stats[stage] = {
+#             "counts": torch.zeros(3, dtype=torch.int64, device=self.device),
+#             "sq_error_sums": torch.zeros(3, dtype=torch.float64, device=self.device),
+#             "nonfinite_batches": 0,
+#         }
+
+#     @torch.no_grad()
+#     def _accumulate_loss_stats(self, stage, per_atom_sq_err, elements, true_disp):
+#         err, elem, disp = per_atom_sq_err.detach(), elements.detach(), true_disp.detach()
+#         if err.ndim != 1 or elem.shape != err.shape or disp.shape != (err.numel(), 3):
+#             raise ValueError("Invalid diagnostic tensor shapes")
+#         mask = elem == TARGET_ELEM_ID
+#         if not mask.any():
+#             return
+#         selected = err[mask].to(torch.float64)
+#         magnitude = disp[mask].to(torch.float64).norm(dim=-1)
+#         if not torch.isfinite(selected).all() or not torch.isfinite(magnitude).all():
+#             raise ValueError("Nonfinite target-element diagnostic values")
+#         boundaries = torch.tensor([1.0, 3.0], dtype=torch.float64, device=self.device)
+#         idx = torch.bucketize(magnitude, boundaries, right=True)
+#         stats = self._loss_stats[stage]
+#         stats["counts"].add_(torch.bincount(idx, minlength=3))
+#         stats["sq_error_sums"].scatter_add_(0, idx, selected)
+
+#     @torch.no_grad()
+#     def _write_loss_stats(self, stage):
+#         if stage not in self._loss_stats:
+#             return
+#         stats = self._loss_stats[stage]
+#         counts = stats["counts"].clone()
+#         sums = stats["sq_error_sums"].clone()
+#         nonfinite = torch.tensor(stats["nonfinite_batches"], dtype=torch.int64,
+#                                  device=self.device)
+#         if torch.distributed.is_available() and torch.distributed.is_initialized():
+#             for tensor in (counts, sums, nonfinite):
+#                 torch.distributed.all_reduce(tensor)
+#         if not self.trainer.is_global_zero:
+#             return
+#         counts, sums = counts.cpu().tolist(), sums.cpu().tolist()
+#         total_sum, total_count = sum(sums), sum(counts)
+#         rows = []
+#         for i, (count, error_sum) in enumerate(zip(counts, sums)):
+#             rows.append({
+#                 "epoch": int(self.current_epoch),
+#                 "split": "validation" if stage == "valid" else stage,
+#                 "prediction_mode": self._prediction_mode,
+#                 "signed_log_enabled": self.signed_log_enabled,
+#                 "error_space": self.error_space,
+#                 "target_element_id": TARGET_ELEM_ID,
+#                 "disp_min_A": DISP_LOG_BINS_A[i],
+#                 "disp_max_A": DISP_LOG_BINS_A[i + 1],
+#                 "count": count,
+#                 "mean_sq_error": error_sum / count if count else float("nan"),
+#                 "sum_sq_error": error_sum,
+#                 "H_error_fraction": error_sum / total_sum if total_sum > 0 else float("nan"),
+#                 "nonfinite_batches": int(nonfinite.item()),
+#             })
+#         output_dir = self.cfg.trainer.get("output_dir", ".") or "."
+#         save_dir = os.path.join(str(output_dir), "loss_logs")
+#         os.makedirs(save_dir, exist_ok=True)
+#         filename = ("loss_by_H_displacement_epoch_signedlog_20261102.csv"
+#                     if self.signed_log_enabled
+#                     else "loss_by_H_displacement_epoch_physical_unweighted_20261102.csv")
+#         path = os.path.join(save_dir, filename)
+#         fields = list(rows[0])
+#         has_content = os.path.isfile(path) and os.path.getsize(path) > 0
+#         if has_content:
+#             with open(path, newline="", encoding="utf-8") as f:
+#                 if next(csv.reader(f), None) != fields:
+#                     raise ValueError(f"Existing CSV header differs: {path}")
+#         with open(path, "a", newline="", encoding="utf-8") as f:
+#             writer = csv.DictWriter(f, fieldnames=fields)
+#             if not has_content:
+#                 writer.writeheader()
+#             writer.writerows(rows)
+#         mean = total_sum / total_count if total_count else float("nan")
+#         self.print(f"[Displacement CSV] epoch={self.current_epoch}, stage={stage}, "
+#                    f"space={self.error_space}, count={total_count}, mean={mean:.6g}")
+
+#     def on_train_epoch_start(self):
+#         self._reset_loss_stats("train")
+
+#     def on_train_epoch_end(self):
+#         # self._write_loss_stats("train")
+#         pass
+
+#     def on_validation_epoch_start(self):
+#         self._reset_loss_stats("valid")
+
+#     def on_validation_epoch_end(self):
+#         # if not self.trainer.sanity_checking:
+#         #     self._write_loss_stats("valid")
+#         pass
+
+
+
+
+
 # -*- coding: utf-8 -*-
 """LiFlow training with optional element-wise signed-log flow (plan A).
 
@@ -864,8 +1173,6 @@ Signed-log ON: physical coordinate inputs, transformed velocity outputs.
 Signed-log OFF: original physical-space flow. No fixed loss weighting.
 The inference integrator must separately support signed-log checkpoints.
 """
-import csv
-import os
 
 import lightning as L
 import torch
@@ -876,28 +1183,47 @@ from liflow.model.models import DualPaiNN
 from liflow.utils.transforms import SignedLogTransform
 
 
-TARGET_ELEM_ID = 1
-DISP_LOG_BINS_A = (0.0, 1.0, 3.0, float("inf"))
-
-
 class FlowModule(L.LightningModule):
-    def __init__(self, cfg: DictConfig, signed_log_parameters=None,
-                 signed_log_enabled=None):
+    def __init__(
+        self,
+        cfg: DictConfig,
+        signed_log_parameters=None,
+        signed_log_enabled=None,
+    ):
         super().__init__()
+
         self.cfg = cfg if isinstance(cfg, DictConfig) else OmegaConf.create(cfg)
+
         section = self.cfg.get("signed_log", {})
         requested = section.get("enabled", False)
+
         if type(requested) is not bool:
             raise ValueError("signed_log.enabled must be True or False")
-        if signed_log_enabled is not None and type(signed_log_enabled) is not bool:
+
+        if (
+            signed_log_enabled is not None
+            and type(signed_log_enabled) is not bool
+        ):
             raise ValueError("signed_log_enabled must be a bool")
+
         # Explicit constructor argument is checkpoint-owned when restoring.
-        self.signed_log_enabled = (requested if signed_log_enabled is None
-                                   else signed_log_enabled)
+        self.signed_log_enabled = (
+            requested
+            if signed_log_enabled is None
+            else signed_log_enabled
+        )
+
         if self.signed_log_enabled != requested:
-            raise ValueError("Checkpoint/config signed-log settings disagree")
+            raise ValueError(
+                "Checkpoint/config signed-log settings disagree"
+            )
+
         if self.cfg.get("active_learning_weight", False):
-            raise ValueError("Fixed loss weighting was removed; remove active_learning_weight=True")
+            raise ValueError(
+                "Fixed loss weighting was removed; "
+                "remove active_learning_weight=True"
+            )
+
         self._prediction_mode = str(self.cfg.model.prediction_mode)
         self._validate_mode()
 
@@ -910,46 +1236,85 @@ class FlowModule(L.LightningModule):
             r_offset=self.cfg.model.r_offset,
             ref_temp=self.cfg.model.ref_temp,
         )
+
         self.displacement_transform = None
         payload = None
+
         if self.signed_log_enabled:
             if signed_log_parameters is None:
                 path = section.get("parameters_path", None)
+
                 if not path:
-                    raise ValueError("Set signed_log.parameters_path for a new signed-log model")
-                self.displacement_transform = SignedLogTransform.from_json(path)
+                    raise ValueError(
+                        "Set signed_log.parameters_path "
+                        "for a new signed-log model"
+                    )
+
+                self.displacement_transform = (
+                    SignedLogTransform.from_json(path)
+                )
             else:
                 if OmegaConf.is_config(signed_log_parameters):
                     signed_log_parameters = OmegaConf.to_container(
-                        signed_log_parameters, resolve=True)
-                self.displacement_transform = SignedLogTransform(signed_log_parameters)
+                        signed_log_parameters,
+                        resolve=True,
+                    )
+
+                self.displacement_transform = SignedLogTransform(
+                    signed_log_parameters
+                )
+
             payload = self.displacement_transform.export_parameters()
             ids = payload["elements"]
-            if max(x["element_id"] for x in ids) >= self.cfg.model.num_elements:
-                raise ValueError("Transform ID exceeds cfg.model.num_elements")
+
+            if (
+                max(x["element_id"] for x in ids)
+                >= self.cfg.model.num_elements
+            ):
+                raise ValueError(
+                    "Transform ID exceeds cfg.model.num_elements"
+                )
+
             delay = self.cfg.data.get("time_delay_steps", None)
-            if delay is not None and payload.get("lag_frames") != int(delay):
-                raise ValueError("JSON lag_frames differs from data.time_delay_steps")
+
+            if (
+                delay is not None
+                and payload.get("lag_frames") != int(delay)
+            ):
+                raise ValueError(
+                    "JSON lag_frames differs from data.time_delay_steps"
+                )
 
         self.save_hyperparameters({
             "cfg": self.cfg,
             "signed_log_parameters": payload,
             "signed_log_enabled": self.signed_log_enabled,
         })
-        self._loss_stats = {}
 
     @property
     def error_space(self):
         if self.signed_log_enabled:
             return "transformed_velocity"
-        return ("physical_velocity" if self._prediction_mode == "velocity"
-                else "physical_displacement")
+
+        return (
+            "physical_velocity"
+            if self._prediction_mode == "velocity"
+            else "physical_displacement"
+        )
 
     def _validate_mode(self):
         if self._prediction_mode not in ("velocity", "data"):
-            raise ValueError(f"Unknown prediction mode: {self._prediction_mode}")
-        if self.signed_log_enabled and self._prediction_mode != "velocity":
-            raise ValueError("Signed-log plan A currently supports velocity mode only")
+            raise ValueError(
+                f"Unknown prediction mode: {self._prediction_mode}"
+            )
+
+        if (
+            self.signed_log_enabled
+            and self._prediction_mode != "velocity"
+        ):
+            raise ValueError(
+                "Signed-log plan A currently supports velocity mode only"
+            )
 
     def setup(self, stage: str):
         pass
@@ -957,205 +1322,236 @@ class FlowModule(L.LightningModule):
     def on_fit_start(self):
         # Fail if train.py replaced model.cfg with incompatible settings.
         requested = self.cfg.get("signed_log", {}).get("enabled", False)
-        if type(requested) is not bool or requested != self.signed_log_enabled:
-            raise ValueError("model.cfg was changed incompatibly after model construction")
-        if str(self.cfg.model.prediction_mode) != self._prediction_mode:
-            raise ValueError("prediction_mode changed after model construction")
+
+        if (
+            type(requested) is not bool
+            or requested != self.signed_log_enabled
+        ):
+            raise ValueError(
+                "model.cfg was changed incompatibly "
+                "after model construction"
+            )
+
+        if (
+            str(self.cfg.model.prediction_mode)
+            != self._prediction_mode
+        ):
+            raise ValueError(
+                "prediction_mode changed after model construction"
+            )
+
         if self.cfg.get("active_learning_weight", False):
             raise ValueError("Fixed loss weighting is not supported")
-        self.print(f"[Flow] signed_log={self.signed_log_enabled}, "
-                   f"prediction_mode={self._prediction_mode}, error_space={self.error_space}, "
-                   "loss=unweighted mean over ALL atoms")
+
+        self.print(
+            f"[Flow] signed_log={self.signed_log_enabled}, "
+            f"prediction_mode={self._prediction_mode}, "
+            f"error_space={self.error_space}, "
+            "loss=unweighted mean over ALL atoms"
+        )
+
         if self.signed_log_enabled:
-            self.print("[Flow] plan A: physical coordinate input -> transformed velocity output")
-            self.print(f"[Flow] transform IDs={self.displacement_transform.species_by_id}")
+            self.print(
+                "[Flow] plan A: physical coordinate input "
+                "-> transformed velocity output"
+            )
+            self.print(
+                "[Flow] transform IDs="
+                f"{self.displacement_transform.species_by_id}"
+            )
 
     def on_load_checkpoint(self, checkpoint):
-        # Protect against silently interpreting an old physical model as transformed.
+        # Prevent interpreting a physical checkpoint as a transformed model.
         hp = checkpoint.get("hyper_parameters", {})
         saved = hp.get("signed_log_enabled", False)
+
         if saved != self.signed_log_enabled:
-            raise ValueError("Checkpoint flow space differs from the constructed model")
-        if self.signed_log_enabled and not hp.get("signed_log_parameters"):
-            raise ValueError("Signed-log checkpoint lacks construction parameters")
+            raise ValueError(
+                "Checkpoint flow space differs "
+                "from the constructed model"
+            )
+
+        if (
+            self.signed_log_enabled
+            and not hp.get("signed_log_parameters")
+        ):
+            raise ValueError(
+                "Signed-log checkpoint lacks construction parameters"
+            )
 
     def forward(self, batch: Batch, t_per_graph: torch.Tensor):
         batch["time"] = t_per_graph[batch.batch]
         return self.model(batch)
 
-    def _prepare_flow(self, original: Batch, t_per_graph: torch.Tensor):
-        # Clone to keep validation inputs independent of previous time evaluations.
+    def _prepare_flow(
+        self,
+        original: Batch,
+        t_per_graph: torch.Tensor,
+    ):
+        # Keep validation inputs independent of previous time evaluations.
         batch = original.clone()
+
         reference = original["positions_1"].clone()
         endpoint = original["positions_2"]
         disp = (endpoint - reference).clone()
         prior = original["prior"]
+
         t = t_per_graph[original.batch][:, None]
+
         if self.signed_log_enabled:
             elements = original["elements"]
-            z0 = self.displacement_transform.transform(prior, elements)
-            z1 = self.displacement_transform.transform(disp, elements)
+
+            z0 = self.displacement_transform.transform(
+                prior,
+                elements,
+            )
+            z1 = self.displacement_transform.transform(
+                disp,
+                elements,
+            )
+
             zt = (1.0 - t) * z0 + t * z1
-            physical_disp = self.displacement_transform.inverse(zt, elements)
+
+            physical_disp = self.displacement_transform.inverse(
+                zt,
+                elements,
+            )
+
             batch["positions_1"] = reference
             batch["positions_2"] = reference + physical_disp
+
             target = z1 - z0
+
         else:
-            # Preserve the arithmetic order of the original physical-space code.
+            # Preserve the original physical-space arithmetic order.
             initial = reference + prior
+
             batch["positions_1"] = reference
-            batch["positions_2"] = (1.0 - t) * initial + t * endpoint
-            target = endpoint - initial if self._prediction_mode == "velocity" else disp
+            batch["positions_2"] = (
+                (1.0 - t) * initial + t * endpoint
+            )
+
+            target = (
+                endpoint - initial
+                if self._prediction_mode == "velocity"
+                else disp
+            )
+
         return batch, target, disp
 
     def _compute_loss_details(self, outputs, targets):
-        if outputs.shape != targets.shape or outputs.ndim != 2 or outputs.shape[1] != 3:
-            raise ValueError("Outputs and targets must both have shape [N, 3]")
-        per_atom_sq_err = (outputs - targets).pow(2).sum(-1)
+        if (
+            outputs.shape != targets.shape
+            or outputs.ndim != 2
+            or outputs.shape[1] != 3
+        ):
+            raise ValueError(
+                "Outputs and targets must both have shape [N, 3]"
+            )
+
+        per_atom_sq_err = (
+            (outputs - targets).pow(2).sum(-1)
+        )
+
         return per_atom_sq_err.mean(), per_atom_sq_err
 
     def compute_loss(self, outputs, targets):
         return self._compute_loss_details(outputs, targets)[0]
 
     def training_step(self, batch: Batch, batch_idx: int):
-        t = torch.rand((batch.num_graphs,), device=self.device, dtype=torch.float)
-        flow_batch, target, disp = self._prepare_flow(batch, t)
+        t = torch.rand(
+            (batch.num_graphs,),
+            device=self.device,
+            dtype=torch.float,
+        )
+
+        flow_batch, target, _ = self._prepare_flow(batch, t)
         outputs = self(flow_batch, t_per_graph=t)
-        loss, errors = self._compute_loss_details(outputs, target)
+        loss = self.compute_loss(outputs, target)
+
         if not torch.isfinite(loss):
-            # self._loss_stats["train"]["nonfinite_batches"] += 1
-            self.print(f"[WARNING] Skipping batch {batch_idx}, "
-                       f"epoch={self.current_epoch}, loss={loss.item()}")
-            # Existing single-GPU automatic-optimization behavior.
+            self.print(
+                f"[WARNING] Skipping batch {batch_idx}, "
+                f"epoch={self.current_epoch}, "
+                f"loss={loss.item()}"
+            )
             return None
-        #self._accumulate_loss_stats("train", errors, batch["elements"], disp)
-        self.log("train/loss", loss, on_step=True, on_epoch=True,
-                 prog_bar=True, batch_size=batch.num_graphs)
+
+        self.log(
+            "train/loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=batch.num_graphs,
+        )
+
         return loss
 
     @torch.no_grad()
     def validation_step(self, batch: Batch, batch_idx: int):
         ntime = self.cfg.valid.num_time_steps
+
         if ntime < 1:
-            raise ValueError("valid.num_time_steps must be >= 1")
-        t_list = torch.linspace(0.0, 1.0, ntime, device=self.device, dtype=torch.float)
+            raise ValueError(
+                "valid.num_time_steps must be >= 1"
+            )
+
+        t_list = torch.linspace(
+            0.0,
+            1.0,
+            ntime,
+            device=self.device,
+            dtype=torch.float,
+        )
+
         losses = []
-        record = not self.trainer.sanity_checking
-        nonfinite = False
+
         for t in t_list:
             t_per_graph = t.expand(batch.num_graphs).clone()
-            flow_batch, target, disp = self._prepare_flow(batch, t_per_graph)
-            outputs = self(flow_batch, t_per_graph=t_per_graph)
-            loss, errors = self._compute_loss_details(outputs, target)
+
+            flow_batch, target, _ = self._prepare_flow(
+                batch,
+                t_per_graph,
+            )
+
+            outputs = self(
+                flow_batch,
+                t_per_graph=t_per_graph,
+            )
+
+            loss = self.compute_loss(outputs, target)
+
             if not torch.isfinite(loss):
-                nonfinite = True
-                self.print(f"[WARNING] Nonfinite validation: epoch={self.current_epoch}, "
-                           f"batch={batch_idx}, t={t.item():.4f}, loss={loss.item()}")
-            # elif record:
-            #     self._accumulate_loss_stats("valid", errors, batch["elements"], disp)
+                self.print(
+                    "[WARNING] Nonfinite validation: "
+                    f"epoch={self.current_epoch}, "
+                    f"batch={batch_idx}, "
+                    f"t={t.item():.4f}, "
+                    f"loss={loss.item()}"
+                )
+
             losses.append(loss)
-        # if record and nonfinite:
-        #     self._loss_stats["valid"]["nonfinite_batches"] += 1
+
         loss = torch.stack(losses).mean()
-        self.log("valid/loss", loss, on_epoch=True, batch_size=batch.num_graphs)
+
+        self.log(
+            "valid/loss",
+            loss,
+            on_epoch=True,
+            batch_size=batch.num_graphs,
+        )
+
         return loss
 
     def configure_optimizers(self):
         if self.cfg.optimizer.class_name != "Adam":
-            raise ValueError(f"Unknown optimizer: {self.cfg.optimizer.class_name}")
-        return torch.optim.Adam(self.model.parameters(), lr=self.cfg.optimizer.lr)
+            raise ValueError(
+                f"Unknown optimizer: "
+                f"{self.cfg.optimizer.class_name}"
+            )
 
-    def _reset_loss_stats(self, stage):
-        self._loss_stats[stage] = {
-            "counts": torch.zeros(3, dtype=torch.int64, device=self.device),
-            "sq_error_sums": torch.zeros(3, dtype=torch.float64, device=self.device),
-            "nonfinite_batches": 0,
-        }
-
-    @torch.no_grad()
-    def _accumulate_loss_stats(self, stage, per_atom_sq_err, elements, true_disp):
-        err, elem, disp = per_atom_sq_err.detach(), elements.detach(), true_disp.detach()
-        if err.ndim != 1 or elem.shape != err.shape or disp.shape != (err.numel(), 3):
-            raise ValueError("Invalid diagnostic tensor shapes")
-        mask = elem == TARGET_ELEM_ID
-        if not mask.any():
-            return
-        selected = err[mask].to(torch.float64)
-        magnitude = disp[mask].to(torch.float64).norm(dim=-1)
-        if not torch.isfinite(selected).all() or not torch.isfinite(magnitude).all():
-            raise ValueError("Nonfinite target-element diagnostic values")
-        boundaries = torch.tensor([1.0, 3.0], dtype=torch.float64, device=self.device)
-        idx = torch.bucketize(magnitude, boundaries, right=True)
-        stats = self._loss_stats[stage]
-        stats["counts"].add_(torch.bincount(idx, minlength=3))
-        stats["sq_error_sums"].scatter_add_(0, idx, selected)
-
-    @torch.no_grad()
-    def _write_loss_stats(self, stage):
-        if stage not in self._loss_stats:
-            return
-        stats = self._loss_stats[stage]
-        counts = stats["counts"].clone()
-        sums = stats["sq_error_sums"].clone()
-        nonfinite = torch.tensor(stats["nonfinite_batches"], dtype=torch.int64,
-                                 device=self.device)
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            for tensor in (counts, sums, nonfinite):
-                torch.distributed.all_reduce(tensor)
-        if not self.trainer.is_global_zero:
-            return
-        counts, sums = counts.cpu().tolist(), sums.cpu().tolist()
-        total_sum, total_count = sum(sums), sum(counts)
-        rows = []
-        for i, (count, error_sum) in enumerate(zip(counts, sums)):
-            rows.append({
-                "epoch": int(self.current_epoch),
-                "split": "validation" if stage == "valid" else stage,
-                "prediction_mode": self._prediction_mode,
-                "signed_log_enabled": self.signed_log_enabled,
-                "error_space": self.error_space,
-                "target_element_id": TARGET_ELEM_ID,
-                "disp_min_A": DISP_LOG_BINS_A[i],
-                "disp_max_A": DISP_LOG_BINS_A[i + 1],
-                "count": count,
-                "mean_sq_error": error_sum / count if count else float("nan"),
-                "sum_sq_error": error_sum,
-                "H_error_fraction": error_sum / total_sum if total_sum > 0 else float("nan"),
-                "nonfinite_batches": int(nonfinite.item()),
-            })
-        output_dir = self.cfg.trainer.get("output_dir", ".") or "."
-        save_dir = os.path.join(str(output_dir), "loss_logs")
-        os.makedirs(save_dir, exist_ok=True)
-        filename = ("loss_by_H_displacement_epoch_signedlog_20261102.csv"
-                    if self.signed_log_enabled
-                    else "loss_by_H_displacement_epoch_physical_unweighted_20261102.csv")
-        path = os.path.join(save_dir, filename)
-        fields = list(rows[0])
-        has_content = os.path.isfile(path) and os.path.getsize(path) > 0
-        if has_content:
-            with open(path, newline="", encoding="utf-8") as f:
-                if next(csv.reader(f), None) != fields:
-                    raise ValueError(f"Existing CSV header differs: {path}")
-        with open(path, "a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fields)
-            if not has_content:
-                writer.writeheader()
-            writer.writerows(rows)
-        mean = total_sum / total_count if total_count else float("nan")
-        self.print(f"[Displacement CSV] epoch={self.current_epoch}, stage={stage}, "
-                   f"space={self.error_space}, count={total_count}, mean={mean:.6g}")
-
-    def on_train_epoch_start(self):
-        self._reset_loss_stats("train")
-
-    def on_train_epoch_end(self):
-        # self._write_loss_stats("train")
-        pass
-
-    def on_validation_epoch_start(self):
-        self._reset_loss_stats("valid")
-
-    def on_validation_epoch_end(self):
-        # if not self.trainer.sanity_checking:
-        #     self._write_loss_stats("valid")
-        pass
+        return torch.optim.Adam(
+            self.model.parameters(),
+            lr=self.cfg.optimizer.lr,
+        )
