@@ -1,37 +1,37 @@
-import pandas as pd
+# import pandas as pd
 
-def create_window_csv():
-    # 設定値
-    name = "small_H2_300K_nvt"
-    temp = 300
-    window_size = 11  # t_end - t_start の幅
-    #n_windows = 99950     # 作成する行数 100000-window_size+1 = 99950
-    n_windows = 100000 - window_size + 2     # 作成する行数 100000-window_size+1 = 99950
-    stride = 1        # ずらす幅
+# def create_window_csv():
+#     # 設定値
+#     name = "small_H2_300K_nvt"
+#     temp = 300
+#     window_size = 11  # t_end - t_start の幅
+#     #n_windows = 99950     # 作成する行数 100000-window_size+1 = 99950
+#     n_windows = 100000 - window_size + 2     # 作成する行数 100000-window_size+1 = 99950
+#     stride = 1        # ずらす幅
     
-    # データを生成
-    rows = []
-    for i in range(n_windows):
-        t_start = i * stride
-        t_end = t_start + window_size
-        rows.append({
-            "name": name,
-            "temp": temp,
-            "t_start": t_start,
-            "t_end": t_end,
-            "prior_Li": 1,
-            "prior_frame": 0
-        })
+#     # データを生成
+#     rows = []
+#     for i in range(n_windows):
+#         t_start = i * stride
+#         t_end = t_start + window_size
+#         rows.append({
+#             "name": name,
+#             "temp": temp,
+#             "t_start": t_start,
+#             "t_end": t_end,
+#             "prior_Li": 1,
+#             "prior_frame": 0
+#         })
         
-    # データフレームに変換してCSV保存
-    df = pd.DataFrame(rows)
-    df.to_csv("train_1000ps_20260825_100fs.csv", index=False)
+#     # データフレームに変換してCSV保存
+#     df = pd.DataFrame(rows)
+#     df.to_csv("train_1000ps_20260825_100fs.csv", index=False)
     
-    return df
+#     return df
 
-if __name__ == "__main__":
-    df = create_window_csv()
-    print("CSVを出力しました:\n", df)
+# if __name__ == "__main__":
+#     df = create_window_csv()
+#     print("CSVを出力しました:\n", df)
 
 
 
@@ -330,3 +330,261 @@ if __name__ == "__main__":
 
 # if __name__ == "__main__":
 #     main()
+
+
+
+
+
+
+
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+
+# =========================================================
+# 設定
+# =========================================================
+DATA_DIR = Path(".")
+OUTPUT_CSV = Path("train_1000ps_500fs_large50_labels.csv")
+
+NAME = "small_H2_300K_nvt"
+TEMP = 300
+
+TIME_DELAY_STEPS = 50
+STRIDE = 1
+
+CELL_LENGTH_A = 13.659831
+LARGE_THRESHOLD_A = CELL_LENGTH_A / 2.0
+
+# atomic_numbersではなく、element_index.npyで変換した内部元素ID
+TARGET_ELEM_ID = 1
+
+PRIOR_LI = 1
+PRIOR_FRAME = 0
+
+# 現在のDataModuleと同じ分割規則で件数を確認する
+VALID_FRACTION = 0.2
+
+# 大きな中間配列を作らないため、変位計算を分割する
+CHUNK_SIZE = 10000
+
+
+def temporal_train_valid_split(df, valid_fraction):
+    if not 0.0 < valid_fraction < 1.0:
+        raise ValueError("VALID_FRACTIONは0より大きく1未満にしてください。")
+
+    sorted_df = df.sort_values(
+        ["name", "temp", "t_start"]
+    ).reset_index(drop=True)
+
+    step = max(1, round(1.0 / valid_fraction))
+
+    valid_indices = []
+    for _, group in sorted_df.groupby(["name", "temp"], sort=False):
+        valid_indices.extend(group.index[::step].tolist())
+
+    valid_mask = sorted_df.index.isin(valid_indices)
+
+    return (
+        sorted_df.loc[~valid_mask].copy(),
+        sorted_df.loc[valid_mask].copy(),
+    )
+
+
+def summarize(df, label):
+    n_total = len(df)
+    n_large = int(df["is_large"].sum())
+    n_normal = n_total - n_large
+
+    print(f"\n[{label}]")
+    print(f"全ペア数       : {n_total:,}")
+    print(f"通常ペア数     : {n_normal:,}")
+    print(f"大変位ペア数   : {n_large:,}")
+
+    if n_total == 0:
+        return
+
+    f = n_large / n_total
+
+    print(f"大変位割合     : {100.0 * f:.6f}%")
+    print(
+        "最大対象変位   : "
+        f"{df['max_target_disp_A'].max():.8f} A"
+    )
+
+    if label != "train":
+        return
+
+    if n_large == 0:
+        print("注意: 大変位ペアが0件なので、50%提示は実行できません。")
+        return
+
+    if n_large > n_normal:
+        print("注意: 大変位が既に50%超です。追加方式の再検討が必要です。")
+        return
+
+    n_add = n_normal - n_large
+    epoch_size = 2 * n_normal
+
+    print(f"\n大変位50%提示時の追加件数 : {n_add:,}")
+    print(f"1 epochの提示数          : {epoch_size:,}")
+    print(
+        "大変位1ペアの平均提示回数 : "
+        f"{n_normal / n_large:.6f}"
+    )
+
+    print("\n後で学習コードへ適用する補正係数")
+    print(f"通常ペア : {2.0 * (1.0 - f):.12g}")
+    print(f"大変位   : {2.0 * f:.12g}")
+
+
+def create_window_csv():
+    if STRIDE < 1 or TIME_DELAY_STEPS < 1:
+        raise ValueError("STRIDEとTIME_DELAY_STEPSは1以上にしてください。")
+
+    if OUTPUT_CSV.exists():
+        raise FileExistsError(
+            f"出力ファイルが既にあります。名前を変更してください: {OUTPUT_CSV}"
+        )
+
+    atomic_numbers_dict = np.load(
+        DATA_DIR / "atomic_numbers.npy",
+        allow_pickle=True,
+    ).item()
+
+    element_idx = np.load(DATA_DIR / "element_index.npy")
+
+    atomic_numbers = np.asarray(
+        atomic_numbers_dict[NAME],
+        dtype=np.int64,
+    )
+
+    elements = element_idx[atomic_numbers]
+    target_indices = np.flatnonzero(elements == TARGET_ELEM_ID)
+
+    if target_indices.size == 0:
+        raise ValueError(
+            f"内部元素ID={TARGET_ELEM_ID}の対象原子が存在しません。"
+        )
+
+    npz_path = DATA_DIR / f"positions_{TEMP}K.npz"
+
+    with np.load(npz_path) as npz:
+        positions = npz[NAME]
+
+    if positions.ndim != 3 or positions.shape[-1] != 3:
+        raise ValueError(
+            f"座標配列は[frame, atom, 3]である必要があります: "
+            f"{positions.shape}"
+        )
+
+    n_frames, n_atoms, _ = positions.shape
+
+    if n_atoms != len(atomic_numbers):
+        raise ValueError(
+            f"座標の原子数={n_atoms}とatomic_numbersの件数="
+            f"{len(atomic_numbers)}が一致しません。"
+        )
+
+    if n_frames <= TIME_DELAY_STEPS:
+        raise ValueError("0.5 psペアを作るためのフレーム数が不足しています。")
+
+    # 終了frameがn_frames未満となる全開始frame
+    starts = np.arange(
+        0,
+        n_frames - TIME_DELAY_STEPS,
+        STRIDE,
+        dtype=np.int64,
+    )
+    ends = starts + TIME_DELAY_STEPS
+
+    max_displacements = np.empty(len(starts), dtype=np.float64)
+
+    for lo in range(0, len(starts), CHUNK_SIZE):
+        hi = min(lo + CHUNK_SIZE, len(starts))
+
+        s = starts[lo:hi]
+        e = ends[lo:hi]
+
+        # unwrapped座標を使用。差を取る前にfloat64へ変換する。
+        r_start = positions[
+            s[:, None], target_indices[None, :], :
+        ].astype(np.float64)
+
+        r_end = positions[
+            e[:, None], target_indices[None, :], :
+        ].astype(np.float64)
+
+        if not (
+            np.isfinite(r_start).all()
+            and np.isfinite(r_end).all()
+        ):
+            raise ValueError(
+                f"対象原子座標にNaN/Infがあります: ペア位置{lo}:{hi}"
+            )
+
+        distances = np.linalg.norm(r_end - r_start, axis=-1)
+        max_displacements[lo:hi] = distances.max(axis=1)
+
+    df = pd.DataFrame({
+        "name": NAME,
+        "temp": TEMP,
+        "t_start": starts,
+
+        # 現行Datasetのrandint上限除外に合わせる。
+        # 実際の終了frameはt_end - 1。
+        "t_end": ends + 1,
+
+        "prior_Li": PRIOR_LI,
+        "prior_frame": PRIOR_FRAME,
+        "max_target_disp_A": max_displacements,
+        "is_large": (
+            max_displacements >= LARGE_THRESHOLD_A
+        ).astype(np.int8),
+    })
+
+    if not (
+        df["t_end"] - df["t_start"] == TIME_DELAY_STEPS + 1
+    ).all():
+        raise ValueError("固定ペアの区間幅が不正です。")
+
+    if df.duplicated(["name", "temp", "t_start"]).any():
+        raise ValueError("同じ開始frameのペアが重複しています。")
+
+    train_df, valid_df = temporal_train_valid_split(
+        df, VALID_FRACTION
+    )
+
+    OUTPUT_CSV.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(OUTPUT_CSV, index=False, float_format="%.12g")
+
+    print(f"保存先             : {OUTPUT_CSV}")
+    print(f"座標配列           : {positions.shape}")
+    print(f"frame差            : {TIME_DELAY_STEPS}")
+    print(f"対象原子index      : {target_indices.tolist()}")
+    print(
+        "対象原子の原子番号 : "
+        f"{atomic_numbers[target_indices].tolist()}"
+    )
+    print(f"大変位閾値         : {LARGE_THRESHOLD_A:.10f} A")
+    print(
+        f"最初のペア         : {starts[0]} -> {ends[0]}"
+    )
+    print(
+        f"最後のペア         : {starts[-1]} -> {ends[-1]}"
+    )
+
+    summarize(df, "all")
+    summarize(train_df, "train")
+    summarize(valid_df, "validation")
+
+    print("\n先頭5行:")
+    print(df.head().to_string(index=False))
+
+    return df
+
+
+if __name__ == "__main__":
+    create_window_csv()
